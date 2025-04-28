@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGL 2 - Balok Bertekstur Ganda (Eksternal)</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Mencegah scrollbar */
+            height: 100%;
+            background-color: #222; /* Latar belakang gelap */
+        }
+        #webgl-canvas {
+            display: block; /* Menghilangkan spasi ekstra di bawah canvas */
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="webgl-canvas"></canvas>
+
+    <!-- Library gl-matrix -->
+    <script src="https://cdn.jsdelivr.net/npm/gl-matrix@3.4.3/gl-matrix-min.js"></script>
+
+    <!-- Vertex Shader (GLSL ES 300) - Sama seperti sebelumnya -->
+    <script id="vertex-shader" type="x-shader/x-vertex">#version 300 es
+    precision mediump float;
+
+    in vec3 a_position;
+    in vec2 a_texcoord;
+
+    uniform mat4 u_mvpMatrix;
+
+    out vec2 v_texcoord;
+
+    void main() {
+        gl_Position = u_mvpMatrix * vec4(a_position, 1.0);
+        v_texcoord = a_texcoord;
+    }
+    </script>
+
+    <!-- Fragment Shader (GLSL ES 300) - Sama seperti sebelumnya -->
+    <script id="fragment-shader" type="x-shader/x-fragment">#version 300 es
+    precision mediump float;
+
+    in vec2 v_texcoord;
+
+    uniform sampler2D u_texture;
+
+    out vec4 outColor;
+
+    void main() {
+        // Mengambil sampel warna dari tekstur menggunakan koordinat yang diterima
+        // Jika v_texcoord.s > 1.0, TEXTURE_WRAP_S = gl.REPEAT akan menanganinya
+        outColor = texture(u_texture, v_texcoord);
+
+        // Jaga-jaga jika format gambar (seperti JPEG) tidak punya alpha yang jelas
+        if (outColor.a < 0.1) {
+             outColor.a = 1.0;
+        }
+    }
+    </script>
+
+    <!-- Kode JavaScript Utama -->
+    <script>
+        // Alias untuk glMatrix
+        const { mat4, vec3 } = glMatrix;
+
+        let gl;
+        let shaderProgram;
+        let vao; // Vertex Array Object
+        let vertexBuffer;
+        let indexBuffer;
+        let texture;
+        let textureLoaded = false;
+
+        // Lokasi uniform dan atribut
+        let positionAttribLocation;
+        let texcoordAttribLocation;
+        let mvpMatrixUniformLocation;
+        let textureUniformLocation;
+
+        // Matriks
+        const modelMatrix = mat4.create();
+        const viewMatrix = mat4.create();
+        const projMatrix = mat4.create();
+        const mvpMatrix = mat4.create();
+
+        // --- Data Geometri Balok ---
+        // Kita perpanjang di sumbu X (lebar). Y (tinggi) dan Z (kedalaman) tetap.
+        // Koordinat Tekstur 's' akan menjadi 2.0 pada sisi yang lebar (Depan, Belakang, Kiri, Kanan)
+        // Koordinat Tekstur 's' tetap 1.0 pada sisi Atas & Bawah.
+        const blockVertexData = new Float32Array([
+        // Format: Posisi(x,y,z), Tekstur(s,t)
+            // Depan (lebar, Z+)
+            -1.0, -0.5,  0.5,  0.0, 0.0, // 0: Bawah Kiri
+             1.0, -0.5,  0.5,  2.0, 0.0, // 1: Bawah Kanan (s=2)
+             1.0,  0.5,  0.5,  2.0, 1.0, // 2: Atas Kanan   (s=2)
+            -1.0,  0.5,  0.5,  0.0, 1.0, // 3: Atas Kiri
+            // Belakang (lebar, Z-)
+            -1.0, -0.5, -0.5,  2.0, 0.0, // 4: Bawah Kiri (s=2, dibalik agar orientasi benar)
+            -1.0,  0.5, -0.5,  2.0, 1.0, // 5: Atas Kiri    (s=2, dibalik)
+             1.0,  0.5, -0.5,  0.0, 1.0, // 6: Atas Kanan
+             1.0, -0.5, -0.5,  0.0, 0.0, // 7: Bawah Kanan
+            // Atas (normal, Y+)
+            -1.0,  0.5, -0.5,  0.0, 1.0, // 8 (sama dgn 5, UV beda): Kiri Belakang
+            -1.0,  0.5,  0.5,  0.0, 0.0, // 9 (sama dgn 3, UV beda): Kiri Depan
+             1.0,  0.5,  0.5,  1.0, 0.0, // 10(sama dgn 2, UV beda): Kanan Depan (s=1)
+             1.0,  0.5, -0.5,  1.0, 1.0, // 11(sama dgn 6, UV beda): Kanan Belakang (s=1)
+            // Bawah (normal, Y-)
+            -1.0, -0.5, -0.5,  0.0, 1.0, // 12(sama dgn 4, UV beda): Kiri Belakang
+             1.0, -0.5, -0.5,  1.0, 1.0, // 13(sama dgn 7, UV beda): Kanan Belakang (s=1)
+             1.0, -0.5,  0.5,  1.0, 0.0, // 14(sama dgn 1, UV beda): Kanan Depan (s=1)
+            -1.0, -0.5,  0.5,  0.0, 0.0, // 15(sama dgn 0, UV beda): Kiri Depan
+            // Kanan (lebar, X+)
+             1.0, -0.5, -0.5,  2.0, 0.0, // 16(sama dgn 7, UV beda): Belakang Bawah (s=2, dibalik)
+             1.0,  0.5, -0.5,  2.0, 1.0, // 17(sama dgn 6, UV beda): Belakang Atas  (s=2, dibalik)
+             1.0,  0.5,  0.5,  0.0, 1.0, // 18(sama dgn 2, UV beda): Depan Atas
+             1.0, -0.5,  0.5,  0.0, 0.0, // 19(sama dgn 1, UV beda): Depan Bawah
+            // Kiri (lebar, X-)
+            -1.0, -0.5, -0.5,  0.0, 0.0, // 20(sama dgn 4, UV beda): Belakang Bawah
+            -1.0, -0.5,  0.5,  2.0, 0.0, // 21(sama dgn 0, UV beda): Depan Bawah (s=2)
+            -1.0,  0.5,  0.5,  2.0, 1.0, // 22(sama dgn 3, UV beda): Depan Atas  (s=2)
+            -1.0,  0.5, -0.5,  0.0, 1.0, // 23(sama dgn 5, UV beda): Belakang Atas
+        ]);
+
+        // Indeks untuk menggambar balok (struktur sama, merujuk ke vertex baru)
+        const blockIndices = new Uint16Array([
+             0,  1,  2,   0,  2,  3, // Depan
+             4,  5,  6,   4,  6,  7, // Belakang
+             8,  9, 10,   8, 10, 11, // Atas
+            12, 13, 14,  12, 14, 15, // Bawah
+            16, 17, 18,  16, 18, 19, // Kanan
+            20, 21, 22,  20, 22, 23, // Kiri
+        ]);
+
+        // --- Fungsi Utama ---
+        window.onload = main;
+
+        function main() {
+            const canvas = document.getElementById('webgl-canvas');
+            gl = canvas.getContext('webgl2');
+
+            if (!gl) {
+                console.error("WebGL 2 tidak didukung.");
+                alert("WebGL 2 tidak didukung. Coba gunakan browser modern.");
+                return;
+            }
+
+            if (!setupShaders()) return;
+            setupGeometry();
+            setupTexture('B.jpeg'); // Memulai pemuatan tekstur B.jpeg
+            setupMatricesAndViewport();
+            window.addEventListener('resize', handleResize);
+            requestAnimationFrame(renderLoop);
+        }
+
+        // --- Fungsi Setup ---
+
+        function setupShaders() {
+            // ... (Sama seperti contoh sebelumnya - kompilasi & link shader) ...
+            const vertexShaderSource = document.getElementById('vertex-shader').textContent;
+            const fragmentShaderSource = document.getElementById('fragment-shader').textContent;
+
+            const vertexShader = compileShader(gl.VERTEX_SHADER, vertexShaderSource);
+            const fragmentShader = compileShader(gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+            if (!vertexShader || !fragmentShader) return false;
+
+            shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.attachShader(shaderProgram, fragmentShader);
+            gl.linkProgram(shaderProgram);
+
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                console.error('Gagal me-link program shader:', gl.getProgramInfoLog(shaderProgram));
+                // ... (cleanup) ...
+                return false;
+            }
+
+            // Dapatkan lokasi setelah link
+            positionAttribLocation = gl.getAttribLocation(shaderProgram, 'a_position');
+            texcoordAttribLocation = gl.getAttribLocation(shaderProgram, 'a_texcoord');
+            mvpMatrixUniformLocation = gl.getUniformLocation(shaderProgram, 'u_mvpMatrix');
+            textureUniformLocation = gl.getUniformLocation(shaderProgram, 'u_texture');
+
+            // ... (detach & delete shader) ...
+            gl.detachShader(shaderProgram, vertexShader);
+            gl.detachShader(shaderProgram, fragmentShader);
+            gl.deleteShader(vertexShader);
+            gl.deleteShader(fragmentShader);
+
+            return true;
+        }
+
+        function compileShader(type, source) {
+            // ... (Sama seperti contoh sebelumnya - kompilasi shader) ...
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error(`Gagal mengkompilasi shader (${type === gl.VERTEX_SHADER ? 'vertex' : 'fragment'}):`, gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        function setupGeometry() {
+            vao = gl.createVertexArray();
+            gl.bindVertexArray(vao);
+
+            // VBO dengan data balok baru
+            vertexBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, blockVertexData, gl.STATIC_DRAW); // Pakai data balok
+
+            const stride = 5 * Float32Array.BYTES_PER_ELEMENT; // 3 pos + 2 texcoord
+
+            // Atribut Posisi
+            gl.enableVertexAttribArray(positionAttribLocation);
+            gl.vertexAttribPointer(positionAttribLocation, 3, gl.FLOAT, false, stride, 0);
+
+            // Atribut Koordinat Tekstur
+            gl.enableVertexAttribArray(texcoordAttribLocation);
+            gl.vertexAttribPointer(texcoordAttribLocation, 2, gl.FLOAT, false, stride, 3 * Float32Array.BYTES_PER_ELEMENT);
+
+            // IBO dengan indeks balok baru
+            indexBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, blockIndices, gl.STATIC_DRAW); // Pakai indeks balok
+
+            // Unbind VAO dan buffer
+            gl.bindVertexArray(null);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+        }
+
+        function setupTexture(imageUrl) {
+            texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+
+            // Tampilkan pixel placeholder biru saat loading
+            const level = 0;
+            const internalFormat = gl.RGBA;
+            const width = 1; const height = 1; const border = 0;
+            const srcFormat = gl.RGBA; const srcType = gl.UNSIGNED_BYTE;
+            const pixel = new Uint8Array([0, 0, 255, 255]); // Biru
+            gl.texImage2D(gl.TEXTURE_2D, level, internalFormat, width, height, border, srcFormat, srcType, pixel);
+
+            // Mulai memuat gambar
+            const image = new Image();
+            image.onload = function() {
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); // Balik sumbu Y gambar agar sesuai UV map 0,0 di bawah kiri
+                gl.texImage2D(gl.TEXTURE_2D, level, internalFormat, srcFormat, srcType, image);
+
+                // === Pengaturan Tekstur Kunci ===
+                // Atur WRAP_S ke REPEAT agar koordinat s > 1.0 mengulang tekstur
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+                // WRAP_T bisa CLAMP_TO_EDGE atau REPEAT, tidak masalah untuk sisi atas/bawah
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+                // Filtering
+                if (isPowerOf2(image.width) && isPowerOf2(image.height)) {
+                   gl.generateMipmap(gl.TEXTURE_2D);
+                   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+                   console.log("Tekstur power-of-two, menggunakan mipmap.");
+                } else {
+                   // Non-power-of-two tidak bisa mipmap otomatis
+                   // REPEAT tetap bekerja dengan LINEAR filtering
+                   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                   console.warn("Tekstur bukan power-of-two, mipmap tidak dibuat. Menggunakan filter LINEAR.");
+                }
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); // Filter pembesaran
+
+                textureLoaded = true;
+                console.log(`Tekstur "${imageUrl}" berhasil dimuat.`);
+            };
+            image.onerror = function() {
+                console.error(`Gagal memuat tekstur dari "${imageUrl}". Pastikan file ada di direktori yang sama.`);
+                // Tekstur akan tetap berwarna biru (placeholder)
+            };
+            image.src = imageUrl; // Memulai pemuatan gambar (asinkron)
+        }
+
+        function isPowerOf2(value) {
+          return (value & (value - 1)) === 0;
+        }
+
+        function setupMatricesAndViewport() {
+            // Mundurkan kamera sedikit agar balok lebar terlihat jelas
+            mat4.lookAt(viewMatrix,
+                [0, 1.5, 4.5], // Posisi kamera (eye) - sedikit lebih tinggi & jauh
+                [0, 0, 0],   // Titik yang dilihat (center)
+                [0, 1, 0]    // Vektor 'up'
+            );
+
+            // Panggil handleResize untuk setup awal viewport dan proyeksi
+            handleResize();
+        }
+
+        // --- Fungsi Penanganan Resize ---
+        function handleResize() {
+            // ... (Sama seperti contoh sebelumnya - update ukuran canvas, viewport, matriks proyeksi) ...
+             const canvas = gl.canvas;
+            const displayWidth  = canvas.clientWidth;
+            const displayHeight = canvas.clientHeight;
+
+            if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+                canvas.width = displayWidth;
+                canvas.height = displayHeight;
+                console.log(`Canvas resized to: ${displayWidth}x${displayHeight}`);
+
+                // Update viewport
+                gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+
+                // Update matriks proyeksi berdasarkan aspek rasio baru
+                const fieldOfView = 45 * Math.PI / 180; // dalam radian
+                const aspect = gl.drawingBufferWidth / gl.drawingBufferHeight;
+                const zNear = 0.1;
+                const zFar = 100.0;
+                mat4.perspective(projMatrix, fieldOfView, aspect, zNear, zFar);
+            }
+        }
+
+        // --- Render Loop ---
+        let previousTime = 0;
+        let rotationAngle = 0;
+
+        function renderLoop(currentTime) {
+            currentTime *= 0.001; // ke detik
+            const deltaTime = currentTime - previousTime;
+            previousTime = currentTime;
+
+            // Hanya render jika tekstur sudah siap
+            if (!textureLoaded) {
+                requestAnimationFrame(renderLoop); // Tetap minta frame berikutnya
+                return;
+            }
+
+            handleResize(); // Cek perubahan ukuran jendela
+
+            // Clear canvas
+            gl.clearColor(0.2, 0.2, 0.2, 1.0);
+            gl.clearDepth(1.0);
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+            // Update rotasi
+            rotationAngle += deltaTime * 0.35; // Kecepatan rotasi
+
+            // Update matriks model (rotasi)
+            mat4.identity(modelMatrix);
+            mat4.rotate(modelMatrix, modelMatrix, rotationAngle, [0, 1, 0]); // Rotasi sumbu Y
+            mat4.rotate(modelMatrix, modelMatrix, rotationAngle * 0.5, [1, 0, 1]); // Rotasi sumbu X dan Z sedikit
+
+            // Hitung matriks MVP final
+            mat4.multiply(mvpMatrix, viewMatrix, modelMatrix);
+            mat4.multiply(mvpMatrix, projMatrix, mvpMatrix);
+
+            // --- Gambar Balok ---
+            gl.useProgram(shaderProgram);
+            gl.bindVertexArray(vao); // Aktifkan state geometri balok
+
+            // Set uniform matriks
+            gl.uniformMatrix4fv(mvpMatrixUniformLocation, false, mvpMatrix);
+
+            // Set uniform tekstur
+            gl.activeTexture(gl.TEXTURE0); // Gunakan unit tekstur 0
+            gl.bindTexture(gl.TEXTURE_2D, texture); // Ikat tekstur kita
+            gl.uniform1i(textureUniformLocation, 0); // Beritahu shader unit mana yang dipakai
+
+            // Gambar menggunakan indeks
+            gl.drawElements(gl.TRIANGLES, blockIndices.length, gl.UNSIGNED_SHORT, 0);
+
+            // Unbind VAO (good practice)
+            gl.bindVertexArray(null);
+
+            // Minta frame selanjutnya
+            requestAnimationFrame(renderLoop);
+        }
+
+    </script>
+</body>
+</html>
