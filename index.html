@@ -3,25 +3,91 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kubus dengan Tekstur Eksternal</title>
+    <title>Kubus dengan Tekstur B.jpeg</title>
     <style>
         body { margin: 0; overflow: hidden; } /* Hapus margin dan sembunyikan scrollbar */
-        canvas { display: block; } /* Pastikan canvas tidak memiliki spasi ekstra */
+        canvas { display: block; } /* Pastikan canvas mengisi ruang */
     </style>
 </head>
 <body>
-    <canvas id="webgl-canvas"></canvas>
+    <!-- Impor pustaka Three.js dari CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
 
-    <!-- Import Three.js (gunakan CDN untuk kemudahan) -->
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+    <script>
+        // 1. Pengaturan Dasar Scene, Kamera, dan Renderer
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xdddddd); // Warna latar belakang (opsional)
+
+        const camera = new THREE.PerspectiveCamera(
+            75, // Field of View (FOV)
+            window.innerWidth / window.innerHeight, // Aspect Ratio
+            0.1, // Near clipping plane
+            1000 // Far clipping plane
+        );
+        camera.position.z = 3; // Mundurkan kamera agar kubus terlihat
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true }); // Aktifkan antialiasing
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement); // Tambahkan canvas ke body
+
+        // 2. Membuat Geometri Kubus
+        const geometry = new THREE.BoxGeometry(1.5, 1.5, 1.5); // Ukuran kubus (lebar, tinggi, kedalaman)
+
+        // 3. Memuat Tekstur Eksternal
+        const textureLoader = new THREE.TextureLoader();
+        const texture = textureLoader.load(
+            'B.jpeg', // Nama file gambar Anda (pastikan ada di folder yang sama)
+            () => {
+                console.log('Tekstur B.jpeg berhasil dimuat.');
+                // Panggil animate setelah tekstur dimuat untuk memastikan render awal benar
+                animate();
+            },
+            undefined, // Fungsi onProgress (opsional)
+            (err) => {
+                console.error('Gagal memuat tekstur B.jpeg:', err);
+                // Jika gagal, mungkin gunakan material warna dasar sebagai fallback
+                material.map = null; // Hapus map jika gagal
+                material.color.set(0xff0000); // Set warna merah misalnya
+                material.needsUpdate = true;
+                animate(); // Tetap jalankan animasi
             }
-        }
-    </script>
+        );
 
-    <!-- Script JavaScript kita -->
-    <script type="module" src="script.js"></script>
+        // 4. Membuat Material dengan Tekstur
+        // MeshBasicMaterial tidak terpengaruh cahaya
+        // Jika ingin reaksi terhadap cahaya, gunakan MeshStandardMaterial atau MeshPhongMaterial
+        const material = new THREE.MeshBasicMaterial({
+             map: texture // Terapkan tekstur yang dimuat
+        });
+
+        // 5. Membuat Mesh (Objek Kubus)
+        const cube = new THREE.Mesh(geometry, material);
+        scene.add(cube); // Tambahkan kubus ke scene
+
+        // 6. Fungsi Animasi (Loop Render)
+        function animate() {
+            requestAnimationFrame(animate); // Minta browser untuk memanggil fungsi ini lagi di frame berikutnya
+
+            // Putar kubus (opsional)
+            cube.rotation.x += 0.005;
+            cube.rotation.y += 0.005;
+
+            renderer.render(scene, camera); // Render scene dari sudut pandang kamera
+        }
+
+        // Panggil animate pertama kali (akan dipanggil lagi di callback load jika sukses)
+        // animate(); // Dipindahkan ke dalam callback load tekstur
+
+        // 7. Menangani Perubahan Ukuran Jendela Browser
+        window.addEventListener('resize', () => {
+            // Update aspect ratio kamera
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+
+            // Update ukuran renderer
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
 </body>
 </html>
